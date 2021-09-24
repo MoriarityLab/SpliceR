@@ -1,6 +1,6 @@
 SpliceR version 1.2.0
 
-Hello! Welcome to SpliceR! We hope that our program can be of use for your XXXX.
+Hello! Welcome to SpliceR! We hope that our program can be of use for your design of base editing sgRNAs for protein disruption.
 
 If you are noticing any errors when using the application please feel free to reach out Mitch and Branden at klues009@umn.edu and mori0164@umn.edu for troubleshooting and input on the application.
 
