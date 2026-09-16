@@ -86,7 +86,7 @@ sense = gene_coordinates$strand[1]
 ensembl_gene_id = gene_coordinates$gene_id[1]
 
 # generate URL for loading the iframe
-ensembl = paste0("https://useast.ensembl.org/",
+ensembl = paste0("https://www.ensembl.org/",
                  species,
                  "/Gene/Summary?db=core;g=",
                  ensembl_gene_id,
