@@ -37,7 +37,7 @@ getTranscriptExonCoordinates = function(id, upstream = 0, downstream = 0, specie
   require(magrittr)
   require(tidyverse)
   url = paste0(
-    "http://useast.ensembl.org/",
+    "https://www.ensembl.org",
     species,
     "/Export/Output/Gene?db=core",";",
     "flank3_display=", as.character(upstream),";",
@@ -74,14 +74,14 @@ coordinatesToDNAString = function(start, end, strand, chromosome, species = "Hom
   seq = if(strand == 1) {
     start = start - upstream
     end = end + downstream
-    paste0("http://useast.ensembl.org/", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
+    paste0("https://www.ensembl.org", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
            chromosome, ":", start, "-", end, ";strand=", strand, 
            ";utr5=yes;cdna=yes;intron=yes;utr3=yes;peptide=yes;coding=yes;genomic=unmasked;exon=yes;_format=Text") %>%
       readDNAStringSet() %>% .[[1]]
   } else {
     anti_end = start + upstream
     anti_start = end - downstream
-    paste0("http://useast.ensembl.org/", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
+    paste0("https://www.ensembl.org", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
            chromosome, ":", anti_start, "-", anti_end, ";strand=", strand, 
            ";utr5=yes;cdna=yes;intron=yes;utr3=yes;peptide=yes;coding=yes;genomic=unmasked;exon=yes;_format=Text") %>%
       readDNAStringSet() %>% .[[1]]
@@ -98,7 +98,7 @@ coordinatesToDNAChar = function(start, end, strand, chromosome, species = "Homo_
   end = max(c(start, end))
     start = start - upstream
     end = end + downstream
-   seq = paste0("http://useast.ensembl.org/", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
+   seq = paste0("https://www.ensembl.org", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
            chromosome, ":", start, "-", end, ";strand=", strand, 
            ";utr5=yes;cdna=yes;intron=yes;utr3=yes;peptide=yes;coding=yes;genomic=unmasked;exon=yes;_format=Text") %>%
       readDNAStringSet() %>% .[[1]] %>% as.character()
