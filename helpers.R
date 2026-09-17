@@ -1,16 +1,7 @@
 ##### global.R for SpliceR
 
-##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### 
-# Copyright (C) 2019-2020 Mitchell Kluesner
-#  
-# This file is part of SpliceR
-# 
-# Please only copy and/or distribute this script with proper citation of SpliceR publication
-##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### 
-
 ##### Set options for environment
 options(shiny.sanitize.errors = FALSE)
-httr::set_config(httr::config(ssl_verifypeer = FALSE))
 
 ##### Load packages
 library(shiny)
@@ -24,93 +15,142 @@ library(grr)
 library(printr)
 library(plyr)
 library(readr)
-library(printr)
 library(rmarkdown)
 library(DT)
 library(httr)
-library(curl)
+library(jsonlite)
 
+# Global GraphQL & Refget endpoints
+ENSEMBL_GRAPHQL_URL <- "https://beta.ensembl.org/data/graphql"
+ENSEMBL_REFGET_URL  <- "https://beta.ensembl.org/data/refget/sequence/"
 
-# Given a chromosome, species, and genomic coordinates this function extracts genomic sequences. 1.12.18
-# formerly getTranscript
+# Query Ensembl GraphQL to extract exon genomic coordinates and strand for a given transcript ID
 getTranscriptExonCoordinates = function(id, upstream = 0, downstream = 0, species = "Homo_sapiens"){
-  require(magrittr)
-  require(tidyverse)
-  url = paste0(
-    "https://www.ensembl.org",
-    species,
-    "/Export/Output/Gene?db=core",";",
-    "flank3_display=", as.character(upstream),";",
-    "flank5_display=",as.character(downstream),";",
-    "output=tab",";",
-    "strand=feature",";",
-    "t=",id,";",
-    "param=gene",";",
-    "miscset_ABC=yes",";",
-    "miscset_RPCI-11=yes",";",
-    "miscset_CHORI-17=yes",";",
-    "miscset_WIBR-2=yes",";",
-    "miscset_encode=yes",";",
-    "miscset_encode_excluded=yes",";",
-    "miscset_tilepath=yes",";",
-    "_format=Text"
+  # GraphQL query to retrieve transcript coordinates, strand, and associated exon slices
+  gql_query <- '
+  query GetTranscriptExons($transcriptId: String!) {
+    transcript(by_id: { stable_id: $transcriptId }) {
+      stable_id
+      gene {
+        stable_id
+      }
+      slice {
+        region {
+          name
+        }
+        strand {
+          code
+          value
+        }
+      }
+      exons {
+        slice {
+          location {
+            start
+            end
+          }
+        }
+      }
+    }
+  }'
+  
+  response <- POST(
+    url = ENSEMBL_GRAPHQL_URL,
+    body = list(query = gql_query, variables = list(transcriptId = id)),
+    encode = "json",
+    content_type_json()
   )
   
-  ensembl_data = url %>% read_tsv()
-  ensembl_data %>%
-    dplyr::filter(., transcript_id == id) %>%
-    dplyr::select(start, end, strand, seqname, gene_id) %>%
-    dplyr::rename(exon_chrom_start = start, exon_chrom_end = end, chromosome_name = seqname) %>%
-    dplyr::mutate(strand = as.numeric(paste0(strand, 1))) %>%
-    as_tibble()
+  stop_for_status(response)
+  res_content <- content(response, as = "parsed", simplifyVector = FALSE)
+  
+  tx_data <- res_content$data$transcript
+  if (is.null(tx_data)) {
+    stop(paste("Transcript ID not found via Ensembl GraphQL:", id))
+  }
+  
+  chr_name  <- tx_data$slice$region$name
+  strand_val <- as.numeric(tx_data$slice$strand$value)
+  gene_id   <- tx_data$gene$stable_id
+  
+  exons_list <- tx_data$exons
+  
+  df_exons <- do.call(rbind, lapply(exons_list, function(ex) {
+    data.frame(
+      exon_chrom_start = ex$slice$location$start,
+      exon_chrom_end   = ex$slice$location$end,
+      strand           = strand_val,
+      chromosome_name  = chr_name,
+      gene_id          = gene_id,
+      transcript_id    = id,
+      stringsAsFactors = FALSE
+    )
+  }))
+  
+  # Apply upstream/downstream adjustments based on strand definition
+  if (upstream != 0 || downstream != 0) {
+    if (strand_val == 1) {
+      df_exons$exon_chrom_start <- df_exons$exon_chrom_start - upstream
+      df_exons$exon_chrom_end   <- df_exons$exon_chrom_end + downstream
+    } else {
+      df_exons$exon_chrom_start <- df_exons$exon_chrom_start - downstream
+      df_exons$exon_chrom_end   <- df_exons$exon_chrom_end + upstream
+    }
+  }
+  
+  return(as_tibble(df_exons))
 }
 
-### Function for getting sequence from genomic coordinates
-### Formerly get_seq
+# Fetch genomic DNA sequence via GraphQL / Refget and return a Biostrings DNAString
 coordinatesToDNAString = function(start, end, strand, chromosome, species = "Homo_sapiens", upstream = 0, downstream = 0){
-  require(magrittr)
-  require(tidyverse)
-  require(Biostrings)
-  seq = if(strand == 1) {
-    start = start - upstream
-    end = end + downstream
-    paste0("https://www.ensembl.org", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
-           chromosome, ":", start, "-", end, ";strand=", strand, 
-           ";utr5=yes;cdna=yes;intron=yes;utr3=yes;peptide=yes;coding=yes;genomic=unmasked;exon=yes;_format=Text") %>%
-      readDNAStringSet() %>% .[[1]]
-  } else {
-    anti_end = start + upstream
-    anti_start = end - downstream
-    paste0("https://www.ensembl.org", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
-           chromosome, ":", anti_start, "-", anti_end, ";strand=", strand, 
-           ";utr5=yes;cdna=yes;intron=yes;utr3=yes;peptide=yes;coding=yes;genomic=unmasked;exon=yes;_format=Text") %>%
-      readDNAStringSet() %>% .[[1]]
-  } 
-  return(seq)
+  seq_str <- coordinatesToDNAChar(start, end, strand, chromosome, species, upstream, downstream)
+  return(Biostrings::DNAString(seq_str))
 }
 
+# Fetch genomic DNA sequence via GraphQL / Refget and return a raw character string
 coordinatesToDNAChar = function(start, end, strand, chromosome, species = "Homo_sapiens", upstream = 0, downstream = 0){
-  require(magrittr)
-  require(tidyverse)
-  require(Biostrings)
-  # seq = if(strand == 1) {
-  start = min(c(start, end))
-  end = max(c(start, end))
-    start = start - upstream
-    end = end + downstream
-   seq = paste0("https://www.ensembl.org", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
-           chromosome, ":", start, "-", end, ";strand=", strand, 
-           ";utr5=yes;cdna=yes;intron=yes;utr3=yes;peptide=yes;coding=yes;genomic=unmasked;exon=yes;_format=Text") %>%
-      readDNAStringSet() %>% .[[1]] %>% as.character()
-  # } else {
-  #   anti_end = start + upstream
-  #   anti_start = end - downstream
-  #   paste0("http://useast.ensembl.org/", species, "/Export/Output/Location?db=core;flank3_display=0;flank5_display=0;output=fasta;r=",
-  #          chromosome, ":", anti_start, "-", anti_end, ";strand=", strand, 
-  #          ";utr5=yes;cdna=yes;intron=yes;utr3=yes;peptide=yes;coding=yes;genomic=unmasked;exon=yes;_format=Text") %>%
-  #     readDNAStringSet() %>% .[[1]] %>% as.character()
-  # } 
-  return(seq)
+  # Sort coordinates
+  c_start <- min(start, end) - upstream
+  c_end   <- max(start, end) + downstream
+  
+  # GraphQL query to resolve chromosome sequence checksum ID for refget API
+  gql_query <- '
+  query GetRegionSequenceChecksum($regionName: String!) {
+    region(by_name: { name: $regionName }) {
+      sequence {
+        checksum
+      }
+    }
+  }'
+  
+  response <- POST(
+    url = ENSEMBL_GRAPHQL_URL,
+    body = list(query = gql_query, variables = list(regionName = as.character(chromosome))),
+    encode = "json",
+    content_type_json()
+  )
+  
+  stop_for_status(response)
+  res_content <- content(response, as = "parsed", simplifyVector = FALSE)
+  checksum <- res_content$data$region$sequence$checksum
+  
+  # refget protocol uses 0-based start coordinates
+  refget_start <- c_start - 1
+  refget_end   <- c_end
+  
+  refget_url <- paste0(ENSEMBL_REFGET_URL, checksum, "?start=", refget_start, "&end=", refget_end)
+  
+  seq_resp <- GET(refget_url, add_headers(Accept = "text/plain"))
+  stop_for_status(seq_resp)
+  
+  dna_seq <- content(seq_resp, as = "text", encoding = "UTF-8")
+  
+  # Reverse-complement if on the negative strand
+  if (strand == -1) {
+    dna_seq <- revcom(dna_seq)
+  }
+  
+  return(dna_seq)
 }
 
 # Vectorized 'matchPatterns' function
@@ -147,300 +187,119 @@ addProtospacerCoordinates = function(data, guide_length){
   data %>% 
     mutate(
       cbe_position_tmp = {
-        # IF gene is sense...
         ifelse(strand == 1,
                {
-                 # THEN assign as sense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   ifelse(cbe_position <= 1, cbe_position + 1, cbe_position),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       ifelse(cbe_position <= 2, cbe_position + 1, cbe_position),
-                       
-                       # ELSE assing as ABE and splice acceptor
-                       ifelse(cbe_position <= 2, cbe_position+ 1, cbe_position)
-                     )
-                   }
-                 ) 
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        ifelse(cbe_position <= 1, cbe_position + 1, cbe_position),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 ifelse(cbe_position <= 2, cbe_position + 1, cbe_position),
+                                 ifelse(cbe_position <= 2, cbe_position + 1, cbe_position))
+                        }) 
                },
-               
                {
-                 # THEN assign as antisense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   ifelse(cbe_position <= 1, cbe_position + 1, cbe_position),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       ifelse(cbe_position <= 2, cbe_position + 1, cbe_position),
-                       
-                       # ELSE assing as ABE and splice acceptor
-                       ifelse(cbe_position <= 1, cbe_position + 1, cbe_position)
-                     )
-                   }
-                 ) 
-               }
-        )
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        ifelse(cbe_position <= 1, cbe_position + 1, cbe_position),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 ifelse(cbe_position <= 2, cbe_position + 1, cbe_position),
+                                 ifelse(cbe_position <= 1, cbe_position + 1, cbe_position))
+                        }) 
+               })
       },
-      
       abe_position_tmp = {
-        # IF gene is sense...
         ifelse(strand == 1,
                {
-                 # THEN assign as sense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   ifelse(abe_position <= 1, abe_position + 1, abe_position),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       ifelse(abe_position <= 1, abe_position + 1, abe_position),
-                       
-                       # ELSE assesing as ABE and splice acceptor
-                       ifelse(abe_position <= 0, abe_position + 1, abe_position)
-                     )
-                   }
-                 ) 
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        ifelse(abe_position <= 1, abe_position + 1, abe_position),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 ifelse(abe_position <= 1, abe_position + 1, abe_position),
+                                 ifelse(abe_position <= 0, abe_position + 1, abe_position))
+                        }) 
                },
-               
                {
-                 # THEN assign as antisense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   ifelse(abe_position <= 0, abe_position + 1, abe_position),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       ifelse(abe_position <= 0, abe_position + 1, abe_position),
-                       
-                       # ELSE assing as ABE and splice acceptor
-                       ifelse(abe_position <= 0, abe_position + 1, abe_position)
-                     )
-                   }
-                 ) 
-               }
-        )
-      },
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        ifelse(abe_position <= 0, abe_position + 1, abe_position),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 ifelse(abe_position <= 0, abe_position + 1, abe_position),
+                                 ifelse(abe_position <= 0, abe_position + 1, abe_position))
+                        }) 
+               })
+      }
     ) %>%
     mutate(
       chromStart = {
-        # IF gene is sense...
         ifelse(strand == 1,
                {
-                 # THEN assign as sense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   (exon_chrom_end - (guide_length - cbe_position_tmp - 1)),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       (exon_chrom_start - (guide_length - cbe_position_tmp)) - 1,
-                       
-                       # ELSE assign as ABE and splice acceptor
-                       (exon_chrom_start - abe_position_tmp) - 1
-                     )
-                   }
-                 ) 
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        (exon_chrom_end - (guide_length - cbe_position_tmp - 1)),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 (exon_chrom_start - (guide_length - cbe_position_tmp)) - 1,
+                                 (exon_chrom_start - abe_position_tmp) - 1)
+                        }) 
                },
-               
                {
-                 # THEN assign as antisense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   (exon_chrom_start - cbe_position_tmp),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       (exon_chrom_end - (cbe_position_tmp - 2)),
-                       
-                       # ELSE assign as ABE and splice acceptor
-                       (exon_chrom_end - (guide_length - abe_position_tmp - 1)) + 1
-                     )
-                   }
-                 ) 
-               }
-        )
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        (exon_chrom_start - cbe_position_tmp),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 (exon_chrom_end - (cbe_position_tmp - 2)),
+                                 (exon_chrom_end - (guide_length - abe_position_tmp - 1)) + 1)
+                        }) 
+               })
       },
-      
       chromEnd = {
-        # IF gene is sense...
         ifelse(strand == 1,
                {
-                 # THEN assign as sense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   (exon_chrom_end + cbe_position_tmp),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       (exon_chrom_start + (cbe_position_tmp - 2)),
-                       
-                       # ELSE assign as ABE and splice acceptor
-                       (exon_chrom_start + (guide_length - abe_position_tmp - 1)) - 1
-                     )
-                   }
-                 ) 
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        (exon_chrom_end + cbe_position_tmp),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 (exon_chrom_start + (cbe_position_tmp - 2)),
+                                 (exon_chrom_start + (guide_length - abe_position_tmp - 1)) - 1)
+                        }) 
                },
-               
                {
-                 # THEN assign as antisense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   (exon_chrom_start + (guide_length - cbe_position_tmp - 1)),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       (exon_chrom_end + (guide_length - cbe_position_tmp + 1)),
-                       
-                       # ELSE assign as ABE and splice acceptor
-                       (exon_chrom_end + abe_position_tmp) + 1
-                     )
-                   }
-                 ) 
-               }
-        )
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        (exon_chrom_start + (guide_length - cbe_position_tmp - 1)),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 (exon_chrom_end + (guide_length - cbe_position_tmp + 1)),
+                                 (exon_chrom_end + abe_position_tmp) + 1)
+                        }) 
+               })
       },
-      
       chromStrand = {
-        # IF gene is sense...
         ifelse(strand == 1,
                {
-                 # THEN assign as sense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   ("-"),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       ("-"),
-                       
-                       # ELSE assign as ABE and splice acceptor
-                       ("+")
-                     )
-                   }
-                 ) 
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        ("-"),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 ("-"),
+                                 ("+"))
+                        }) 
                },
-               
                {
-                 # THEN assign as antisense...
-                 ifelse(
-                   
-                   # IF CBE and ABE AND a splice donor...
-                   (enzyme == "CBE and ABE") & (splice_site == "donor"),
-                   
-                   # THEN assign as CBE and ABE splice donor...
-                   ("+"),
-                   
-                   
-                   {
-                     # ELSE IF CBE AND splice acceptor...
-                     ifelse(
-                       (enzyme == "CBE") & (splice_site == "acceptor"),
-                       
-                       # THEN assign as CBE and splice acceptor
-                       ("+"),
-                       
-                       # ELSE assign as ABE and splice acceptor
-                       ("-")
-                     )
-                   }
-                 ) 
-               }
-        )
+                 ifelse((enzyme == "CBE and ABE") & (splice_site == "donor"),
+                        ("+"),
+                        {
+                          ifelse((enzyme == "CBE") & (splice_site == "acceptor"),
+                                 ("+"),
+                                 ("-"))
+                        }) 
+               })
       }
-      
     ) %>%
-    dplyr::select(-abe_position_tmp, -cbe_position_tmp,-exon_chrom_start, -exon_chrom_end, -strand) %>%
+    dplyr::select(-abe_position_tmp, -cbe_position_tmp, -exon_chrom_start, -exon_chrom_end, -strand) %>%
     dplyr::rename(chrom = chromosome_name, strand = chromStrand)
 } 
 
-
 # Load weight data to calculate guide scores
 motif_weights = read_tsv("motif_weights.tsv")
-
 position_weights = read_tsv("position_weights.tsv")
 
 max_weight = max(motif_weights$motif_weight) + max(position_weights$position_weight)
@@ -466,80 +325,62 @@ abe_position_weights = position_weights %>%
   dplyr::rename(abe_position = position, abe_position_weight = position_weight) %>%
   dplyr::select(abe_position, abe_position_weight)
 
-
-#### Shiny Server Functions
-# IF CBE or ABE is selected, THEN do not filter, else
-
 filterGuides = function(runSpliceR.React,
-         enzymeClass.React,
-         min_editing_window,
-         max_editing_window,
-         splice_site.React,
-         strictFilter
-         ){
-runSpliceR.React %>%
-{if(enzymeClass.React == "CBE and-or ABE") {
-  {.} %>%
-    filter(.,
-           (abe_position >= min_editing_window | cbe_position >= min_editing_window) &
-             (abe_position <= max_editing_window | cbe_position <= max_editing_window)
-    )
-} else {
-  
-  # IF CBE and ABE is selected, THEN include only CBE and ABE
-  if(enzymeClass.React == "CBE and ABE") {
-    filter(., enzyme == "CBE and ABE") %>%
-      filter(
-        (abe_position >= min_editing_window| cbe_position >= min_editing_window) &
-          (abe_position <= max_editing_window | cbe_position <= max_editing_window)
+                        enzymeClass.React,
+                        min_editing_window,
+                        max_editing_window,
+                        splice_site.React,
+                        strictFilter){
+  runSpliceR.React %>%
+    {if(enzymeClass.React == "CBE and-or ABE") {
+      filter(.,
+             (abe_position >= min_editing_window | cbe_position >= min_editing_window) &
+               (abe_position <= max_editing_window | cbe_position <= max_editing_window)
       )
-  } else {
-    
-    # IF CBE is only base editor selected, THEN include only CBE AND CBE and ABE
-    if(enzymeClass.React == "CBE") {
-      filter(., enzyme == "CBE" | enzyme == "CBE and ABE") %>%
-        filter(
-          (cbe_position >= min_editing_window) & (cbe_position <= max_editing_window)
-        )
     } else {
-      
-      # IF ABE is only base editor selected, THEN include only ABE AND CBE and ABE
-      filter(., enzyme == "ABE" | enzyme == "CBE and ABE") %>%
-        filter(
-          (abe_position >= min_editing_window) & (abe_position <= max_editing_window)
-        )
-    }
-  }
-}
-  } %>%
-  {
-    if(splice_site.React == "splice-donors") {
-      filter(., splice_site == "donor")
-    } else {
-      if(splice_site.React == "splice-acceptors") {
-        filter(., splice_site == "acceptor")
+      if(enzymeClass.React == "CBE and ABE") {
+        filter(., enzyme == "CBE and ABE") %>%
+          filter(
+            (abe_position >= min_editing_window| cbe_position >= min_editing_window) &
+              (abe_position <= max_editing_window | cbe_position <= max_editing_window)
+          )
       } else {
-        .
+        if(enzymeClass.React == "CBE") {
+          filter(., enzyme == "CBE" | enzyme == "CBE and ABE") %>%
+            filter(
+              (cbe_position >= min_editing_window) & (cbe_position <= max_editing_window)
+            )
+        } else {
+          filter(., enzyme == "ABE" | enzyme == "CBE and ABE") %>%
+            filter(
+              (abe_position >= min_editing_window) & (abe_position <= max_editing_window)
+            )
+        }
       }
-    }
-  } %>%
+    }} %>%
+    {
+      if(splice_site.React == "splice-donors") {
+        filter(., splice_site == "donor")
+      } else {
+        if(splice_site.React == "splice-acceptors") {
+          filter(., splice_site == "acceptor")
+        } else {
+          .
+        }
+      }
+    } %>%
     {
       if(strictFilter) {
         filter(.,
                (abe_position >= min_editing_window) &
                  (abe_position <= max_editing_window) &
-                  (cbe_position >= min_editing_window) &
-                    (cbe_position <= max_editing_window)
-               )
+                 (cbe_position >= min_editing_window) &
+                 (cbe_position <= max_editing_window)
+        )
       } else {
         .
       }
     } %>%
-  dplyr::rename(Exon = 1, `Splice Site` = 2, `Protospacer` = 3, `PAM` = 4, `Enzyme` = 5, `cDNA Disruption` = 6,
-                `CBE Position` = 7, `CBE Score` = 8, `ABE Position` = 9, `ABE Score` = 10, `Transcript ID` = 11, `Gene ID` = 12)
-
+    dplyr::rename(Exon = 1, `Splice Site` = 2, `Protospacer` = 3, `PAM` = 4, `Enzyme` = 5, `cDNA Disruption` = 6,
+                  `CBE Position` = 7, `CBE Score` = 8, `ABE Position` = 9, `ABE Score` = 10, `Transcript ID` = 11, `Gene ID` = 12)
 }
-
-
-
-

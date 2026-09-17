@@ -1,4 +1,3 @@
-
 # CBE variant
 cbe = "BE4"
 # ABE variant
@@ -8,45 +7,17 @@ source("helpers.R")
 
 ##### Main function
 runSpliceR = function(
-  # splice donors or acceptors
-  # CBE or ABE
-  
-  ## Enzyme variants
-  
   logistic_adjust = 1,
-  
-  # Ensembl ID
   ensembl_transcript_id,
-  # ensembl_transcript_id = "ENST00000380152.8"
-  # a positive sense gene, B2M
-  # ensembl_transcript_id = "ENST00000648006.3",
-  # a negative sense gene, CISH
-  # ensembl_transcript_id = "ENST00000443053.6"
-  
-  # Species
   species,
-  
-  # PAM
   pam,
-  
-  # Guide length
   guide_length = 20,
-  
-  # Flank length
   flank_length = 20,
-  
-  # Downstream gene_seq length
-  downstream_gene_seq = 20 #,
-  
-  # # minimum editing window
-  # min_editing_window,
-  # 
-  # # maximum editing window
-  # max_editing_window
+  downstream_gene_seq = 20
 ){
 
 ##### Operations
-# load data
+# Load data
 cbe_motif_weights = motif_weights %>%
   filter(enzyme == cbe) %>%
   dplyr::rename(cbe_motif = motif, cbe_motif_weight = motif_weight) %>%
@@ -78,62 +49,43 @@ guide.DNAString = rep("N", guide_length) %>%
   paste0(., pam.char) %>%
   DNAString()
 
-# Grab gene information from Ensembl
+# Grab gene information from Ensembl via GraphQL
 gene_coordinates = getTranscriptExonCoordinates(ensembl_transcript_id, species = species)
 
 # Establish the sense of the gene
 sense = gene_coordinates$strand[1]
 ensembl_gene_id = gene_coordinates$gene_id[1]
 
-# generate URL for loading the iframe
-ensembl = paste0("https://www.ensembl.org/",
-                 species,
-                 "/Gene/Summary?db=core;g=",
-                 ensembl_gene_id,
-                 ";r=",
-                 gene_coordinates$chromosome_name[1],
-                 ":",
-                 min(c(gene_coordinates$exon_chrom_start, gene_coordinates$exon_chrom_end)),
-                 "-",
-                 max(c(gene_coordinates$exon_chrom_start, gene_coordinates$exon_chrom_end))
+# Generate URL for loading the iframe (Updated Ensembl URL target)
+ensembl = paste0("https://beta.ensembl.org/genome-browser/gene?id=",
+                 ensembl_gene_id
 )
 
-# The one base is to account for the fact that nucleotide counting is base 1
-# Odd facet that sometimes the exons are out of order, need to pay attention to this, not sure why?
 if(sense == 1){ 
-  # if the gene has a POSITIVE sense...
-  
-  # arrange the gene coordinates by the ascending start of the exons
+  # Positive sense strand
   gene_coordinates %<>% arrange(., exon_chrom_start)
-  # calculate the number of exons
   exon_number = nrow(gene_coordinates)
   
-  # calculate the total length of the bases of interest in the gene
   gene_sequence_length = gene_coordinates %$%
     c(.$exon_chrom_start, .$exon_chrom_end) %>%
     range() %>%
     {.[2] - .[1]} %>%
     {. + 1 + flank_length + pam_length}
   
-  # calculate where the exons start and end within the gene_sequence, accounting for flanking regions
   gene_coordinates %<>%
     mutate(exon_start_index = exon_chrom_start - min(exon_chrom_start) + 1 + flank_length + pam_length) %>%
     mutate(exon_end_index = exon_chrom_end - min(exon_chrom_start) + 1 + flank_length + pam_length)
   
-  # determine where the gene sequence of interest starts within the chromosome
   gene_seq_chrom_start = min(gene_coordinates$exon_chrom_start) - (flank_length + pam_length)
   
-  # establish the coordinates of SA and SD
   gene_coordinates %<>%
     mutate(sa_seq_coordinates = exon_chrom_start - (flank_length + pam_length)) %<>%
     mutate(sd_seq_coordinates = exon_chrom_end - (flank_length + pam_length))
   
-  # calculate the relative positioning of each splice site in the total length of the cDNA
   gene_coordinates %<>% mutate(exon_length = exon_end_index - exon_start_index) %<>%
     mutate(sd_position = 1-cumsum(exon_length)/sum(exon_length)) %<>%
     mutate(sa_position = 1-(cumsum(exon_length)-exon_length)/sum(exon_length))
   
-  # Pull the flanked gene DNA sequence from Ensembl
   gene.DNAString = coordinatesToDNAString(start = gene_coordinates$exon_chrom_start[1], 
                                           end = gene_coordinates$exon_chrom_end[exon_number],
                                           strand = gene_coordinates$strand[1],
@@ -142,42 +94,31 @@ if(sense == 1){
                                           downstream = downstream_gene_seq + pam_length,
                                           species = species
   )
-} else
-{
-  # if the gene has a NEGATIVE sense...
-  
-  # arrange the gene coordinates by the descending start of the exons
+} else {
+  # Negative sense strand
   gene_coordinates %<>% arrange(., desc(exon_chrom_start))
-  
-  # calculate the number of exons
   exon_number = nrow(gene_coordinates)
   
-  # calculate the total length of the bases of interest in the gene
   gene_sequence_length = gene_coordinates %$%
     c(.$exon_chrom_start, .$exon_chrom_end) %>%
     range() %>%
     {.[2] - .[1]} %>%
     {. + 1 + flank_length + pam_length}
   
-  # calculate where the exons start and end within the gene_sequence, accounting for flanking regions
   gene_coordinates %<>%
     mutate(exon_start_index = (max(exon_chrom_end) - exon_chrom_end) + 1 + flank_length + pam_length) %>%
     mutate(exon_end_index = (max(exon_chrom_end) - exon_chrom_start) + 1 + flank_length + pam_length)
   
-  # determine where the gene sequence of interest starts within the chromosome
   gene_seq_chrom_start = max(gene_coordinates$exon_chrom_end) + (flank_length + pam_length)
   
-  # establish the coordinates of SA and SD
   gene_coordinates %<>%
     mutate(sa_seq_coordinates = exon_chrom_end + (flank_length + pam_length)) %<>%
     mutate(sd_seq_coordinates = exon_chrom_start + (flank_length + pam_length))
   
-  # calculate the relative positioning of each splice site in the total length of the cDNA
   gene_coordinates %<>% mutate(exon_length = exon_end_index - exon_start_index) %<>%
     mutate(sd_position = cumsum(exon_length)/sum(exon_length)) %<>%
     mutate(sa_position = (cumsum(exon_length)-exon_length)/sum(exon_length))
   
-  # Pull the flanked gene DNA sequence from Ensembl
   gene.DNAString = coordinatesToDNAString(start = gene_coordinates$exon_chrom_end[1], 
                                           end = gene_coordinates$exon_chrom_start[exon_number],
                                           strand = gene_coordinates$strand[1],
@@ -190,8 +131,6 @@ if(sense == 1){
 
 gene.char = as.character(gene.DNAString)
 
-# NAs are used because there is no intron upstream and downstream of the first and last exon respectively.
-# Update 11.26.17, altered to simply call the 3' UTR and exon as it is possible that there may be an overlapping exon with another transcript, thus it is important to identify guides in this region as well.
 gene_coordinates = gene_coordinates %>%
   rowid_to_column("exon") %>%
   mutate(intron_start_index = exon_end_index + 1) %>%
@@ -202,25 +141,17 @@ gene_coordinates = gene_coordinates %>%
     )
   } else {
     length(gene.DNAString)
-  }
-  )
+  })
 
-# How can we include the genomic coordinates of the guides, as well as the strand that they are on
-# chrom, chromStart, chromEnd, sense
 gene_coordinates = gene_coordinates %>%
   mutate(sa_seq = mapply(FUN = substr,
                          x = gene.char,
                          start = exon_start_index - flank_length - pam_length,
-                         stop = exon_start_index + flank_length + pam_length
-  )
-  ) %>%
+                         stop = exon_start_index + flank_length + pam_length)) %>%
   mutate(sd_seq = mapply(FUN = substr,
                          x = gene.char,
                          start = exon_end_index - flank_length - pam_length,
-                         stop = exon_end_index + flank_length + pam_length
-  )
-  ) %>%
-  # Really this may be an unecessary part of the code
+                         stop = exon_end_index + flank_length + pam_length)) %>%
   mutate(acceptor = mapply(FUN = substr,
                            x = sa_seq,
                            start = flank_length - 4 + pam_length,
@@ -230,9 +161,7 @@ gene_coordinates = gene_coordinates %>%
                         start = flank_length  + pam_length - 3,
                         stop = flank_length  + 6 + pam_length))
 
-##################################################################
 ### Identify guides
-
 cbe_splice_acceptors = gene_coordinates %>%
   .$sa_seq %>%
   DNAStringSet %>%
@@ -244,19 +173,13 @@ abe_splice_acceptors = gene_coordinates %>%
   DNAStringSet %>%
   matchPatterns(pattern = guide.DNAString, subject = ., fixed = FALSE)
 
-# CBE and ABE splice donor guides look the same, they are just scored differently
 splice_donors = gene_coordinates %>%
   .$sd_seq %>%
   DNAStringSet %>%
   reverseComplement %>%
   matchPatterns(pattern = guide.DNAString, subject = ., fixed = FALSE)
 
-
-# Need to get to a dataframe called guides with:
-# Exon, guide, guide_position, splice_site, be --> ABE, CBE
-# all unscored guides are in antisense orientation
 unscored_cbe_splice_acceptors = cbe_splice_acceptors %>%
-  # lapply(FUN = reverseComplement, .) %>%
   extractGuide(., 1:length(.)) %>%
   unlist() %>%
   as.vector()
@@ -267,7 +190,6 @@ unscored_abe_splice_acceptors = abe_splice_acceptors %>%
   as.vector()
 
 unscored_splice_donors = splice_donors %>%
-  # lapply(FUN = reverseComplement, .) %>%
   extractGuide(., 1:length(.)) %>%
   unlist() %>%
   as.vector()
@@ -276,9 +198,7 @@ cbe_splice_acceptors_positions = cbe_splice_acceptors %>% extractGuideStart(., e
 abe_splice_acceptors_positions = abe_splice_acceptors %>% extractGuideStart(., exon = 1:length(.)) %>% unlist() %>% as.vector
 splice_donors_positions = splice_donors %>% extractGuideStart(., exon = 1:length(.)) %>% unlist() %>% as.vector
 
-# Make guides df
-# NNN PAM error starts here, 2020-01-09
-# browser()
+# Build guide data frames
 cbe_splice_acceptor_guides = tibble(guide = unscored_cbe_splice_acceptors,
                                     guide_position = cbe_splice_acceptors_positions,
                                     splice_site = "acceptor",
@@ -299,12 +219,9 @@ cbe_and_abe_splice_acceptor_guides = tibble(guide = unscored_splice_donors,
 
 guides = bind_rows(cbe_splice_acceptor_guides,
                    abe_splice_acceptor_guides,
-                   cbe_and_abe_splice_acceptor_guides
-)
+                   cbe_and_abe_splice_acceptor_guides)
 
-######
 if(nrow(guides) > 0) { 
-  
   guides = gene_coordinates %>% 
     dplyr::select(exon, acceptor, donor) %>% 
     tidyr::gather(exon) %>%
@@ -322,12 +239,8 @@ if(nrow(guides) > 0) {
     ) %>%
     set_names(c("exon","motif","splice_site","disruption_position")) %>%
     inner_join(guides, .) %>%
-    
-    # Remove guides that target the nonsensical exon 1 splice acceptor
     filter(!(exon == 1 & splice_site == "acceptor")) %>%
-    # Remove guides that target the nonsensical last exon splice donor
     filter(!(exon == exon_number & splice_site == "donor")) %>%
-    
     mutate(pam = stringr::str_sub(guide, -pam_length, -1)) %>%
     mutate(protospacer = stringr::str_sub(guide, 1, guide_length)) %>%
     mutate(cbe_position = {ifelse(splice_site == "acceptor",
@@ -337,87 +250,43 @@ if(nrow(guides) > 0) {
     mutate(abe_position = guide_length + pam_length - guide_position) %>%
     mutate(abe_position = {ifelse(abe_position > 0, abe_position, abe_position-1)}, 
            cbe_position = {ifelse(abe_position > 0, cbe_position, cbe_position-1)}) %>%
-    # 
-    # # Remove guides that have targets outside of 1-20 bases
-    # filter(
-    #   (abe_position >= min_editing_window | cbe_position >= min_editing_window) &
-    #     (abe_position <= max_editing_window | cbe_position <= max_editing_window)
-    # ) %>%
-    #
-    # extract the pentanucleotide motif for each guide
-    # IF the guide is an ABE SA guide, THEN leave as is, ELSE reverse complement
     mutate(target_motif = {ifelse(enzyme == "ABE" & splice_site == "acceptor", motif, revcom(motif))}) %>%
-    # Extract the pentanucleotide for each target base
     mutate(cbe_motif = {ifelse(splice_site ==  "donor",
                                substr(target_motif, 2, 8),
                                substr(target_motif, 3, 9))},
            abe_motif = substr(target_motif, 1, 7)
     ) %>%
-    
-    # join the sa_seq and sd_seq for 
     inner_join(., gene_coordinates %>% dplyr::select(exon, sa_seq, sd_seq)) %>%
-    
-    # mutate the sa and sd seq to be in the proper orientation
     mutate(sa_seq = {ifelse(enzyme == "ABE" & splice_site == "acceptor", sa_seq, revcom(sa_seq))}) %>%
     mutate(sd_seq = revcom(sd_seq)) %>%
     
-  # score guides
-    join(., cbe_motif_weights) %>%
-    join(., abe_motif_weights) %>%
-    join(., cbe_position_weights) %>%
-    join(., abe_position_weights) %>%
+    # Swapped legacy plyr::join with dplyr::left_join to maintain tibble integrity
+    dplyr::left_join(cbe_motif_weights, by = "cbe_motif") %>%
+    dplyr::left_join(abe_motif_weights, by = "abe_motif") %>%
+    dplyr::left_join(cbe_position_weights, by = "cbe_position") %>%
+    dplyr::left_join(abe_position_weights, by = "abe_position") %>%
     tibble() %>%
-    # dplyr::rowwise() %>% 
     mutate(cbe_score = probability(cbe_motif_weight + cbe_position_weight - logistic_adjust)) %>%
     mutate(abe_score = probability(abe_motif_weight + abe_position_weight - logistic_adjust)) %>% 
-    
-    # Exon, Splice-site, Protospacer, PAM, Enzyme,
-    # CBE position, CBE motif, CBE Efficiency, ABE position, ABE motif, ABE Efficiency
-    # Gene ID, Transcript ID
     dplyr::select(exon, splice_site, protospacer, pam, enzyme,
                   disruption_position, cbe_position, cbe_score, abe_position, abe_score) %>% 
     mutate(transcript = ensembl_transcript_id, gene = ensembl_gene_id) %>%
-    
-    # replace nonsense values with NULL
     mutate(cbe_position = {ifelse(enzyme == "ABE", NA, cbe_position)}) %>%
     mutate(cbe_score = {ifelse(enzyme == "ABE", NA, cbe_score)}) %>%
     mutate(abe_position = {ifelse(enzyme == "CBE", NA, abe_position)}) %>%
     mutate(abe_score = {ifelse(enzyme == "CBE", NA, abe_score)}) %>%
-    
-    # make numbers have fewer digits
     mutate_if(is.numeric, signif, 3) %>%
-    
-    # add genomic coordinates to guides
-    # append exon coordinate data
     inner_join(.,
                gene_coordinates %>%
                  dplyr::select(exon, chromosome_name, exon_chrom_start, exon_chrom_end, strand)
     ) %>%
-    # # select 
-    # dplyr::select(exon, splice_site, cbe_position, abe_position, protospacer, pam, enzyme,
-    #               chromosome_name, exon_chrom_start, exon_chrom_end, strand) %>%
-    # 
     addProtospacerCoordinates(., guide_length = guide_length) %>%
-    
-    # arrange by CBE score
     arrange(desc(cbe_score))
   
-  
-  # post output filter on UI:
-  # filter on a certain predicted efficiency
-  # filtering on base editing approach
-  
-  # error handling:
-  # If gene contains only one exon
-  # If no guides are found
-  
-} else
-{
+} else {
   guides = tibble(exon, splice_site, protospacer, pam, enzyme,
                   disruption_position, cbe_position, cbe_score, abe_position, abe_score,
                   transcript = ensembl_transcript_id, gene = ensembl_gene_id)
-  
-  
 }
 
 return(list(guides, gene_coordinates, ensembl))
