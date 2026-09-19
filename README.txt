@@ -19,16 +19,14 @@ library(magrittr)
 library(stringi)
 library(dplyr)
 library(tidyr)
+library(tibble)
 library(ggplot2)
-library(grr)
 library(printr)
-library(plyr)
 library(readr)
-library(printr)
 library(rmarkdown)
 library(DT)
 library(httr)
-library(curl)
+library(jsonlite)
 
 3) Determine the directory of the SpliceR app on your computer. It will look something like this:
 
