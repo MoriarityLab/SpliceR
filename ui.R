@@ -1,7 +1,7 @@
 # SpliceR UI
 options(shiny.sanitize.errors = FALSE)
-version = "1.2.0"
-update = "May 24th, 2021"
+version = "1.3.1"
+update = "September 18th, 2026"
 
 shinyUI(
   pageWithSidebar(
@@ -14,7 +14,7 @@ shinyUI(
       p(""),
       p(""),
       em(paste0("Updated ", update, ".")),
-      em(paste0("Please email klues009@umn.edu with any questions, comments, or concerns.")),
+      em(paste0("Please email mori0164@umn.edu with any questions, comments, or concerns.")),
       p(""),
       tags$a(href="https://www.biorxiv.org/content/biorxiv/early/2019/05/09/633685.full.pdf", em("Check out our Nature Communications article")),
       # actionButton(inputId = "actionButton", label = "Update"),

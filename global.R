@@ -16,7 +16,6 @@ runSpliceR = function(
   downstream_gene_seq = 20
 ){
 
-##### Operations
 # Load data
 cbe_motif_weights = motif_weights %>%
   filter(enzyme == cbe) %>%
@@ -56,8 +55,8 @@ gene_coordinates = getTranscriptExonCoordinates(ensembl_transcript_id, species =
 sense = gene_coordinates$strand[1]
 ensembl_gene_id = gene_coordinates$gene_id[1]
 
-# Generate URL for loading the iframe (Updated Ensembl URL target)
-ensembl = paste0("https://beta.ensembl.org/genome-browser/gene?id=",
+# Generate URL for loading the iframe using primary www domain
+ensembl = paste0("https://www.ensembl.org/id/",
                  ensembl_gene_id
 )
 
@@ -260,7 +259,6 @@ if(nrow(guides) > 0) {
     mutate(sa_seq = {ifelse(enzyme == "ABE" & splice_site == "acceptor", sa_seq, revcom(sa_seq))}) %>%
     mutate(sd_seq = revcom(sd_seq)) %>%
     
-    # Swapped legacy plyr::join with dplyr::left_join to maintain tibble integrity
     dplyr::left_join(cbe_motif_weights, by = "cbe_motif") %>%
     dplyr::left_join(abe_motif_weights, by = "abe_motif") %>%
     dplyr::left_join(cbe_position_weights, by = "cbe_position") %>%

@@ -223,10 +223,28 @@ shinyServer(
     })
 
     output$ensembl <- renderUI({
-      withProgress(tags$iframe(src = runSpliceR(ensembl_transcript_id = id.Reactive(), pam = pam.Reactive(), species = species.Reactive()
-                                                )[[3]],
-                             height = 1000, width = 1500),
-      message = "Rendering webpage"
+      url <- runSpliceR(
+        ensembl_transcript_id = id.Reactive(), 
+        pam = pam.Reactive(), 
+        species = species.Reactive()
+      )[[3]]
+      
+      tagList(
+        # Triggers automatic browser navigation in a new tab
+        tags$script(HTML(sprintf("window.open('%s', '_blank');", url))),
+        
+        div(
+          style = "text-align: center; padding: 40px;",
+          h3("Opening Ensembl Genome Browser..."),
+          p("If the page did not open automatically, click the button below:"),
+          a(
+            href = url, 
+            target = "_blank", 
+            class = "btn btn-primary btn-lg", 
+            icon("external-link-alt"), 
+            "Open in Ensembl"
+          )
+        )
       )
     })
     
