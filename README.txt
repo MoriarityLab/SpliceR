@@ -1,4 +1,4 @@
-SpliceR version 1.2.0
+SpliceR version 1.3.1
 
 Hello! Welcome to SpliceR! We hope that our program can be of use for your design of base editing sgRNAs for protein disruption.
 
